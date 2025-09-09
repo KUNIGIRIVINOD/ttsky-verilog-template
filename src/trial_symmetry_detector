@@ -1,0 +1,166 @@
+module trial_symmetry_detector #(
+    parameter integer N = 8
+)(
+    input  wire             clk,
+    input  wire             rst_n,    // active-low sync reset
+    input  wire             load,     // 1-cycle pulse to latch data_in and start check
+    input  wire [N-1:0]     data_in,  // parallel input word (MSB at data_in[N-1])
+    output reg              symmetry, // 1 if symmetric (latched after done)
+    output reg              done,     // 1-cycle pulse when result ready
+    output reg              busy      // high while checking
+);
+
+    // ---------- small utility: clog2 ----------
+    function integer clog2;
+      input integer value;
+      integer i;
+      begin
+        clog2 = 0;
+        for (i = value - 1; i > 0; i = i >> 1)
+          clog2 = clog2 + 1;
+      end
+    endfunction
+
+    localparam IDX_W = (N<=1) ? 1 : clog2(N);
+
+    // FSM states
+    localparam IDLE  = 2'b00;
+    localparam CHECK = 2'b01;
+    localparam PASS  = 2'b10;
+    localparam FAIL  = 2'b11;
+
+    reg [1:0] state, next_state;
+
+    // storage for the input word
+    reg [N-1:0] buff;
+
+    // left and right pointers
+    reg [IDX_W-1:0] left;
+    reg [IDX_W-1:0] right;
+
+    // comparison done when left >= right
+    wire compare_done = (left >= right);
+
+    // synchronous state register
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state    <= IDLE;
+            buff      <= {N{1'b0}};
+            left     <= {IDX_W{1'b0}};
+            right    <= {IDX_W{1'b0}};
+            symmetry <= 1'b0;
+            done     <= 1'b0;
+            busy     <= 1'b0;
+        end else begin
+            state <= next_state;
+            done  <= 1'b0; // default
+
+            case (state)
+                IDLE: begin
+                    busy <= 1'b0;
+                    if (load) begin
+                        buff   <= data_in;
+                        left  <= 0;
+                        right <= N - 1;
+                        busy  <= 1'b1;
+                    end
+                end
+
+                CHECK: begin
+                    busy <= 1'b1;
+                end
+
+                PASS: begin
+                    busy     <= 1'b0;
+                    symmetry <= 1'b1;
+                    done     <= 1'b1; // pulse
+                end
+
+                FAIL: begin
+                    busy     <= 1'b0;
+                    symmetry <= 1'b0;
+                    done     <= 1'b1;
+                end
+
+                default: busy <= 1'b0;
+            endcase
+        end
+    end
+
+    // Next-state and pointer update logic
+    always @(*) begin
+        next_state = state;
+        case (state)
+            IDLE:   if (load) next_state = CHECK;
+            CHECK:  if (buff[left] != buff[right])
+                        next_state = FAIL;
+                    else if (compare_done)
+                        next_state = PASS;
+                    else
+                        next_state = CHECK;
+            PASS:   next_state = IDLE;
+            FAIL:   next_state = IDLE;
+            default:next_state = IDLE;
+        endcase
+    end
+
+    // pointer updates
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            left  <= {IDX_W{1'b0}};
+            right <= {IDX_W{1'b0}};
+        end else if (state == CHECK) begin
+            if (buff[left] == buff[right] && !(left >= right)) begin
+                left  <= left + 1;
+                right <= right - 1;
+            end
+        end else if (load) begin
+            left  <= 0;
+            right <= N - 1;
+        end
+    end
+
+endmodule
+
+// ==================================================
+// TinyTapeout Wrapper
+// ==================================================
+module tt_um_symmetry_detector (
+    input  wire [7:0] ui_in,    // dedicated inputs
+    output wire [7:0] uo_out,   // dedicated outputs
+    input  wire [7:0] uio_in,   // bidirectional inputs (unused)
+    output wire [7:0] uio_out,  // bidirectional outputs (unused)
+    output wire [7:0] uio_oe,   // bidirectional enables (unused)
+    input  wire       clk,
+    input  wire       rst_n
+);
+
+    // Map control + data
+    wire        load    = ui_in[0];   // LSB = load pulse
+    wire [7:0]  data_in = ui_in;      // use all 8 bits as input word
+
+    wire symmetry, done, busy;
+
+    // Instantiate core
+    trial_symmetry_detector #(
+        .N(8)
+    ) core (
+        .clk(clk),
+        .rst_n(rst_n),
+        .load(load),
+        .data_in(data_in),
+        .symmetry(symmetry),
+        .done(done),
+        .busy(busy)
+    );
+
+    // Map outputs
+    assign uo_out[0]   = symmetry;
+    assign uo_out[1]   = done;
+    assign uo_out[2]   = busy;
+    assign uo_out[7:3] = 5'b00000; // unused
+
+    assign uio_out = 8'b00000000; // no bidir used
+    assign uio_oe  = 8'b00000000;
+
+endmodule
