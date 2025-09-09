@@ -16,12 +16,40 @@ module tt_um_example (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  // All output pins must be assigned. If not used, assign to 0.
-  assign uo_out  = ui_in + uio_in;  // Example: ou_out is the sum of ui_in and uio_in
-  assign uio_out = 0;
-  assign uio_oe  = 0;
+  // Internal wire for symmetry detector output
+  wire sym_out;
+
+  // Instantiate symmetry detector
+  symmetry_detector sd_inst (
+    .out(sym_out),
+    .i(ui_in)
+  );
+
+  // Assign detector output to LSB of uo_out, rest = 0
+  assign uo_out  = {7'b0000000, sym_out};
+  assign uio_out = 8'b00000000;
+  assign uio_oe  = 8'b00000000;
 
   // List all unused inputs to prevent warnings
-  wire _unused = &{ena, clk, rst_n, 1'b0};
+  wire _unused = &{uio_in, ena, clk, rst_n, 1'b0};
 
 endmodule
+
+
+// Symmetry Detector Module
+module symmetry_detector(out, i);
+  output out;
+  input [7:0] i;
+  wire [5:0] w;
+
+  xor x1(w[0], i[0], i[7]);
+  xor x2(w[1], i[1], i[6]);
+  xor x3(w[2], i[2], i[5]);
+  xor x4(w[3], i[3], i[4]);
+
+  and a1(w[4], ~w[0], ~w[1]);
+  and a2(w[5], ~w[2], ~w[3]);
+  and a3(out, w[4], w[5]);
+
+endmodule
+
